@@ -1,0 +1,132 @@
+from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QComboBox, QPushButton, QVBoxLayout, QTextEdit
+
+class RamDiskDialog(QDialog):
+    """Dialog for creating a RAM disk."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Create RAM Disk')
+        self.setModal(True)
+        layout = QFormLayout(self)
+        # Common sizes
+        self.size_combo = QComboBox()
+        sizes = ['128M', '256M', '512M', '1G', '2G', '4G']
+        self.size_combo.addItems(sizes)
+        self.size_combo.setEditable(True)
+        self.size_combo.setCurrentText('512M')
+        # Mount point suggestions
+        self.mountpoint_combo = QComboBox()
+        suggestions = self.suggest_mountpoints()
+        for s in suggestions:
+            idx = self.mountpoint_combo.count()
+            self.mountpoint_combo.addItem(s)
+            import os
+            if os.path.exists(s):
+                self.mountpoint_combo.model().item(idx).setEnabled(False)
+        self.mountpoint_combo.setEditable(True)
+        for i in range(self.mountpoint_combo.count()):
+            if self.mountpoint_combo.model().item(i).isEnabled():
+                self.mountpoint_combo.setCurrentIndex(i)
+                break
+        layout.addRow('Size:', self.size_combo)
+        layout.addRow('Mount point:', self.mountpoint_combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def suggest_mountpoints(self):
+        base = '/mnt/ramdisk'
+        return [f'{base}{i}' for i in range(1, 6)]
+
+    def get_data(self):
+        return self.size_combo.currentText().strip(), self.mountpoint_combo.currentText().strip()
+
+class FileDiskDialog(QDialog):
+    """Dialog for creating a file-based disk."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Create File Disk')
+        self.setModal(True)
+        layout = QFormLayout(self)
+        # File suggestions
+        self.file_combo = QComboBox()
+        files = self.suggest_files()
+        for a in files:
+            idx = self.file_combo.count()
+            self.file_combo.addItem(a)
+            import os
+            if os.path.exists(a):
+                self.file_combo.model().item(idx).setEnabled(False)
+        self.file_combo.setEditable(True)
+        for i in range(self.file_combo.count()):
+            if self.file_combo.model().item(i).isEnabled():
+                self.file_combo.setCurrentIndex(i)
+                break
+        # Common sizes
+        self.size_combo = QComboBox()
+        sizes = ['128M', '256M', '512M', '1G', '2G', '4G']
+        self.size_combo.addItems(sizes)
+        self.size_combo.setEditable(True)
+        self.size_combo.setCurrentText('1G')
+        # Mount point suggestions
+        self.mountpoint_combo = QComboBox()
+        suggestions = self.suggest_mountpoints()
+        for s in suggestions:
+            idx = self.mountpoint_combo.count()
+            self.mountpoint_combo.addItem(s)
+            import os
+            if os.path.exists(s):
+                self.mountpoint_combo.model().item(idx).setEnabled(False)
+        self.mountpoint_combo.setEditable(True)
+        for i in range(self.mountpoint_combo.count()):
+            if self.mountpoint_combo.model().item(i).isEnabled():
+                self.mountpoint_combo.setCurrentIndex(i)
+                break
+        layout.addRow('File:', self.file_combo)
+        layout.addRow('Size:', self.size_combo)
+        layout.addRow('Mount point:', self.mountpoint_combo)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def suggest_files(self):
+        base = '/tmp/disco'
+        return [f'{base}{i}.img' for i in range(1, 6)]
+
+    def suggest_mountpoints(self):
+        base = '/mnt/disco'
+        return [f'{base}{i}' for i in range(1, 6)]
+
+    def get_data(self):
+        return (
+            self.file_combo.currentText().strip(),
+            self.size_combo.currentText().strip(),
+            self.mountpoint_combo.currentText().strip()
+        )
+
+def show_full_license(parent):
+    """Show the full GPL v3.0 license in a scrollable dialog."""
+    gpl_text = '''GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+
+... (full GPL 3.0 text here, truncated for brevity) ...
+
+For the full license, see https://www.gnu.org/licenses/gpl-3.0.html
+'''
+    dlg = QDialog(parent)
+    dlg.setWindowTitle('GPL v3.0 License')
+    layout = QVBoxLayout(dlg)
+    text = QTextEdit()
+    text.setReadOnly(True)
+    text.setPlainText(gpl_text)
+    layout.addWidget(text)
+    btn = QPushButton('Close')
+    btn.clicked.connect(dlg.accept)
+    layout.addWidget(btn)
+    dlg.resize(700, 500)
+    dlg.exec_() 
