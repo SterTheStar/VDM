@@ -1,5 +1,4 @@
 # VDM - Virtual Disk Manager
-
 ![VDM Logo](icon.ico)
 
 **VDM (Virtual Disk Manager)** is a modern, user-friendly tool to create, mount, unmount, and manage RAM disks and file-based virtual disks on Linux.
