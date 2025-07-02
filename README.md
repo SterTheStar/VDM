@@ -27,7 +27,7 @@
    ```
 2. **Install requirements:**
    ```bash
-   pip install pyqt5
+   pip install -r requirements.txt
    ```
 3. **Run the app:**
    ```bash
