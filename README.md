@@ -51,8 +51,7 @@ This project is licensed under the **GPL v3.0**. See [LICENSE](https://www.gnu.o
 
 ## Author
 
-**Esther**  
-[github.com/SterTheStar](https://github.com/SterTheStar)
+**Esther** [github.com/SterTheStar](https://github.com/SterTheStar)
 
 ---
 
