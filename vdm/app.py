@@ -1,11 +1,11 @@
 import os
 import datetime
 import subprocess
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QMessageBox, QLabel, QInputDialog, QHeaderView, QComboBox, QCheckBox, QToolButton, QDialog)
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QMessageBox, QLabel, QInputDialog, QHeaderView, QComboBox, QCheckBox, QToolButton, QDialog, QLineEdit)
+from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtGui import QFont
 import qtawesome as qta
-from vdm.logic.utils import resource_path
+from vdm.logic.utils import resource_path, format_size, get_disk_usage, send_notification
 from vdm.logic.disks import load_disks, save_disks, add_disk, remove_disk, sync_disks_status, size_to_mb
 from vdm.dialogs import RamDiskDialog, FileDiskDialog, show_full_license
 
@@ -33,6 +33,11 @@ class MainWindow(QMainWindow):
         self.discos = load_disks(self.discos_json)
         self.init_ui()
         self.update_table()
+        # Monitoramento automático
+        self.monitor_timer = QTimer(self)
+        self.monitor_timer.timeout.connect(self.monitor_disks)
+        self.monitor_timer.start(15000)  # 15 segundos
+        self.notified_full = set()
 
     def init_ui(self):
         central_widget = CentralWidget(table=None)
@@ -65,11 +70,17 @@ class MainWindow(QMainWindow):
         title_label = QLabel('Active Virtual Disks:')
         title_layout.addWidget(title_label)
         title_layout.addStretch()
+        self.btn_edit = QToolButton()
+        self.btn_edit.setIcon(qta.icon('fa5s.edit'))
+        self.btn_edit.setText('Edit')
+        self.btn_edit.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.btn_edit.clicked.connect(self.open_edit_disk_dialog)
         self.btn_about = QToolButton()
         self.btn_about.setIcon(qta.icon('fa5s.info-circle'))
         self.btn_about.setText('About')
         self.btn_about.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_about.clicked.connect(self.show_about)
+        title_layout.addWidget(self.btn_edit)
         title_layout.addWidget(self.btn_about)
         layout.addLayout(title_layout)
 
@@ -100,6 +111,7 @@ class MainWindow(QMainWindow):
         self.table.cellDoubleClicked.connect(self.open_mount_dir)
 
     def update_table(self):
+        from vdm.logic.utils import format_size, get_disk_usage
         self.discos = sync_disks_status(self.discos)
         save_disks(self.discos, self.discos_json)
         self.table.setRowCount(0)
@@ -135,7 +147,14 @@ class MainWindow(QMainWindow):
                     item2 = QTableWidgetItem(mountpoint)
                     item2.setFlags(flags)
                     self.table.setItem(row, 2, item2)
-                    item3 = QTableWidgetItem(size)
+                    # Size column: used/total for RAM disk
+                    try:
+                        used, total = get_disk_usage(mountpoint)
+                        size_str = f"{format_size(used)} / {format_size(total)}"
+                    except Exception:
+                        size_str = format_size(size)
+                    item3 = QTableWidgetItem(size_str)
+                    item3.setTextAlignment(Qt.AlignCenter)
                     item3.setFlags(flags)
                     self.table.setItem(row, 3, item3)
                     status_item = QTableWidgetItem(icon_mounted, 'Mounted')
@@ -158,7 +177,17 @@ class MainWindow(QMainWindow):
             item2 = QTableWidgetItem(disk['mountpoint'])
             item2.setFlags(flags)
             self.table.setItem(row, 2, item2)
-            item3 = QTableWidgetItem(disk['size'])
+            # Size column: used/total only if mounted and mountpoint exists
+            if disk['status'] == 'Mounted' and os.path.exists(disk['mountpoint']):
+                try:
+                    used, total = get_disk_usage(disk['mountpoint'])
+                    size_str = f"{format_size(used)} / {format_size(total)}"
+                except Exception:
+                    size_str = format_size(disk['size'])
+            else:
+                size_str = format_size(disk['size'])
+            item3 = QTableWidgetItem(size_str)
+            item3.setTextAlignment(Qt.AlignCenter)
             item3.setFlags(flags)
             self.table.setItem(row, 3, item3)
             status_icon = icon_mounted if disk['status']=='Mounted' else icon_unmounted
@@ -192,37 +221,63 @@ class MainWindow(QMainWindow):
                 cmd = ['sudo', 'mount', '-t', 'tmpfs', '-o', f'size={size}', 'tmpfs', mountpoint]
                 subprocess.run(cmd, check=True)
                 QMessageBox.information(self, 'Success', f'RAM Disk created and mounted at {mountpoint}.')
+                send_notification('RAM Disk Created', f'RAM Disk mounted at {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.png')))
                 self.update_table()
             except subprocess.CalledProcessError as e:
                 QMessageBox.critical(self, 'Error', f'Failed to create RAM Disk:\n{e}')
+                send_notification('Error', f'Failed to create RAM Disk at {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
 
     def create_file_disk(self):
         dialog = FileDiskDialog(self)
         if dialog.exec_() == QDialog.Accepted:
-            file_path, size, mountpoint = dialog.get_data()
+            file_path, size, mountpoint, encrypt, password = dialog.get_data()
             if not file_path or not size or not mountpoint:
                 QMessageBox.warning(self, 'Error', 'Fill in all fields.')
                 return
+            if encrypt and (not password or len(password) < 3):
+                QMessageBox.warning(self, 'Error', 'Password required for encryption (min 3 chars).')
+                return
             try:
                 subprocess.run(['sudo', 'dd', 'if=/dev/zero', f'of={file_path}', 'bs=1M', f'count={size_to_mb(size)}'], check=True)
-                losetup_out = subprocess.check_output(['sudo', 'losetup', '--find', '--show', file_path], text=True).strip()
-                loopdev = losetup_out
+                if encrypt:
+                    # LUKS format
+                    luks_cmd = ['sudo', 'cryptsetup', 'luksFormat', file_path, '--batch-mode']
+                    p = subprocess.Popen(luks_cmd, stdin=subprocess.PIPE, text=True)
+                    p.communicate(password + '\n')
+                    if p.returncode != 0:
+                        raise Exception('cryptsetup luksFormat failed')
+                    # Open LUKS
+                    luks_name = os.path.basename(file_path) + '_luks'
+                    open_cmd = ['sudo', 'cryptsetup', 'luksOpen', file_path, luks_name]
+                    p = subprocess.Popen(open_cmd, stdin=subprocess.PIPE, text=True)
+                    p.communicate(password + '\n')
+                    if p.returncode != 0:
+                        raise Exception('cryptsetup luksOpen failed')
+                    loopdev = f'/dev/mapper/{luks_name}'
+                else:
+                    losetup_out = subprocess.check_output(['sudo', 'losetup', '--find', '--show', file_path], text=True).strip()
+                    loopdev = losetup_out
                 subprocess.run(['sudo', 'mkfs.ext4', loopdev], check=True)
                 subprocess.run(['sudo', 'mkdir', '-p', mountpoint], check=True)
                 subprocess.run(['sudo', 'mount', loopdev, mountpoint], check=True)
+                subprocess.run(['sudo', 'chmod', '777', mountpoint], check=True)
                 QMessageBox.information(self, 'Success', f'File disk created, formatted and mounted at {mountpoint}.')
                 add_disk(self.discos, {
                     'type': 'File',
                     'device_or_file': file_path,
                     'mountpoint': mountpoint,
                     'size': size,
-                    'status': 'Mounted'
+                    'status': 'Mounted',
+                    'encrypted': bool(encrypt)
                 }, self.discos_json)
+                send_notification('File Disk Created', f'File disk mounted at {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.png')))
                 self.update_table()
             except subprocess.CalledProcessError as e:
                 QMessageBox.critical(self, 'Error', f'Failed to create file disk:\n{e}')
+                send_notification('Error', f'Failed to create file disk at {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f'Unexpected error:\n{e}')
+                send_notification('Error', f'Failed to create file disk at {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
 
     def mount_disk(self):
         row = self.table.currentRow()
@@ -233,6 +288,8 @@ class MainWindow(QMainWindow):
         device_or_file = self.table.item(row, 1).text()
         mountpoint = self.table.item(row, 2).text()
         status = self.table.item(row, 4).text()
+        # Buscar info de disco
+        disk = next((d for d in self.discos if d.get('device_or_file') == device_or_file and d.get('mountpoint') == mountpoint), None)
         if tipo != 'File':
             QMessageBox.warning(self, 'Warning', 'Only file disks can be mounted here.')
             return
@@ -246,23 +303,43 @@ class MainWindow(QMainWindow):
                 return
             mountpoint = mountpoint.strip()
         try:
-            loopdev = None
-            losetup = subprocess.check_output(['sudo', 'losetup', '-a'], text=True)
-            for line in losetup.splitlines():
-                if device_or_file in line:
-                    import re
-                    m = re.match(r'(/dev/loop\d+):', line)
-                    if m:
-                        loopdev = m.group(1)
-                        break
-            if not loopdev:
-                loopdev = subprocess.check_output(['sudo', 'losetup', '--find', '--show', device_or_file], text=True).strip()
+            if disk and disk.get('encrypted'):
+                # Solicitar senha
+                luks_name = os.path.basename(device_or_file) + '_luks'
+                luks_path = f'/dev/mapper/{luks_name}'
+                if not os.path.exists(luks_path):
+                    password, ok = QInputDialog.getText(self, 'Password Required', f'Enter password to unlock encrypted disk:\n{device_or_file}', QLineEdit.Password)
+                    if not ok or not password:
+                        QMessageBox.warning(self, 'Warning', 'Password not provided.')
+                        return
+                    open_cmd = ['sudo', 'cryptsetup', 'luksOpen', device_or_file, luks_name]
+                    p = subprocess.Popen(open_cmd, stdin=subprocess.PIPE, text=True)
+                    p.communicate(password + '\n')
+                    if p.returncode != 0:
+                        QMessageBox.critical(self, 'Error', 'Failed to unlock encrypted disk.')
+                        send_notification('Error', f'Failed to unlock encrypted disk {device_or_file}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
+                        return
+                loopdev = luks_path
+            else:
+                loopdev = None
+                losetup = subprocess.check_output(['sudo', 'losetup', '-a'], text=True)
+                for line in losetup.splitlines():
+                    if device_or_file in line:
+                        import re
+                        m = re.match(r'(/dev/loop\d+):', line)
+                        if m:
+                            loopdev = m.group(1)
+                            break
+                if not loopdev:
+                    loopdev = subprocess.check_output(['sudo', 'losetup', '--find', '--show', device_or_file], text=True).strip()
             subprocess.run(['sudo', 'mkdir', '-p', mountpoint], check=True)
             subprocess.run(['sudo', 'mount', loopdev, mountpoint], check=True)
             QMessageBox.information(self, 'Success', f'Disk mounted at {mountpoint}.')
+            send_notification('Disk Mounted', f'Disk mounted at {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.png')))
             self.update_table()
         except subprocess.CalledProcessError as e:
             QMessageBox.critical(self, 'Error', f'Failed to mount disk:\n{e}')
+            send_notification('Error', f'Failed to mount disk at {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
 
     def unmount_disk(self):
         row = self.table.currentRow()
@@ -272,6 +349,9 @@ class MainWindow(QMainWindow):
         tipo = self.table.item(row, 0).text()
         mountpoint = self.table.item(row, 2).text()
         status = self.table.item(row, 4).text()
+        device_or_file = self.table.item(row, 1).text()
+        # Buscar info de disco
+        disk = next((d for d in self.discos if d.get('device_or_file') == device_or_file and d.get('mountpoint') == mountpoint), None)
         if tipo == 'RAM Disk':
             QMessageBox.information(self, 'Info', 'RAM disks cannot be unmounted. Use Delete to remove them.')
             return
@@ -282,11 +362,34 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, 'Info', 'This disk is already unmounted.')
             return
         try:
-            subprocess.run(['sudo', 'umount', mountpoint], check=True)
+            subprocess.run(['sudo', 'umount', mountpoint], check=True, capture_output=True, text=True)
+            if disk and disk.get('encrypted'):
+                luks_name = os.path.basename(device_or_file) + '_luks'
+                subprocess.run(['sudo', 'cryptsetup', 'luksClose', luks_name], check=True)
+                # Desassociar loop device
+                try:
+                    losetup = subprocess.check_output(['sudo', 'losetup', '-a'], text=True)
+                    for line in losetup.splitlines():
+                        if device_or_file in line:
+                            import re
+                            m = re.match(r'(/dev/loop\d+):', line)
+                            if m:
+                                loopdev = m.group(1)
+                                subprocess.run(['sudo', 'losetup', '-d', loopdev], check=False)
+                                break
+                except Exception:
+                    pass
             QMessageBox.information(self, 'Success', f'Unmounted: {mountpoint}')
+            send_notification('Disk Unmounted', f'Disk unmounted from {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.png')))
             self.update_table()
         except subprocess.CalledProcessError as e:
-            QMessageBox.critical(self, 'Error', f'Failed to unmount:\n{e}')
+            err = e.stderr or str(e)
+            if 'alvo ocupado' in err or 'target is busy' in err:
+                QMessageBox.critical(self, 'Error', f'Could not unmount {mountpoint}: target is busy. Close all programs or terminals using this directory and try again.')
+                send_notification('Error', f'Could not unmount {mountpoint}: target is busy.', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
+            else:
+                QMessageBox.critical(self, 'Error', f'Failed to unmount:\n{err}')
+                send_notification('Error', f'Failed to unmount {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
 
     def delete_disk(self):
         row = self.table.currentRow()
@@ -302,16 +405,24 @@ class MainWindow(QMainWindow):
         try:
             if mountpoint != '-' and mountpoint and status == 'Mounted':
                 try:
-                    subprocess.run(['sudo', 'umount', mountpoint], check=True)
-                except subprocess.CalledProcessError:
-                    QMessageBox.critical(self, 'Error', f'Failed to unmount {mountpoint}.\nClose programs or terminals using the directory and try again.')
+                    subprocess.run(['sudo', 'umount', mountpoint], check=True, capture_output=True, text=True)
+                except subprocess.CalledProcessError as e:
+                    err = e.stderr or str(e)
+                    if 'alvo ocupado' in err or 'target is busy' in err:
+                        QMessageBox.critical(self, 'Error', f'Could not unmount {mountpoint}: target is busy. Close all programs or terminals using this directory and try again.')
+                        send_notification('Error', f'Could not unmount {mountpoint}: target is busy.', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
+                    else:
+                        QMessageBox.critical(self, 'Error', f'Failed to unmount {mountpoint}.\n{err}')
+                        send_notification('Error', f'Failed to unmount {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
                     return
             if tipo == 'RAM Disk':
                 try:
                     subprocess.run(['sudo', 'rmdir', mountpoint], check=True)
                 except subprocess.CalledProcessError:
                     QMessageBox.warning(self, 'Warning', f'Could not remove directory {mountpoint}. Make sure it is empty and not mounted.')
+                    send_notification('Error', f'Could not remove directory {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
             elif tipo == 'File':
+                disk = next((d for d in self.discos if d.get('device_or_file') == device_or_file and d.get('mountpoint') == mountpoint), None)
                 loopdev = None
                 try:
                     losetup = subprocess.check_output(['sudo', 'losetup', '-a'], text=True)
@@ -324,6 +435,18 @@ class MainWindow(QMainWindow):
                                 break
                 except Exception:
                     pass
+                # Se for criptografado, fechar LUKS e desassociar loop
+                if disk and disk.get('encrypted'):
+                    luks_name = os.path.basename(device_or_file) + '_luks'
+                    try:
+                        subprocess.run(['sudo', 'cryptsetup', 'luksClose', luks_name], check=False)
+                    except Exception:
+                        pass
+                    try:
+                        if loopdev:
+                            subprocess.run(['sudo', 'losetup', '-d', loopdev], check=False)
+                    except Exception:
+                        pass
                 if loopdev:
                     subprocess.run(['sudo', 'losetup', '-d', loopdev], check=False)
                 subprocess.run(['sudo', 'rm', '-f', device_or_file], check=False)
@@ -331,13 +454,17 @@ class MainWindow(QMainWindow):
                     subprocess.run(['sudo', 'rmdir', mountpoint], check=True)
                 except subprocess.CalledProcessError:
                     QMessageBox.warning(self, 'Warning', f'Could not remove directory {mountpoint}. Make sure it is empty and not mounted.')
+                    send_notification('Error', f'Could not remove directory {mountpoint}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
                 idx = next((i for i, d in enumerate(self.discos) if d['device_or_file'] == device_or_file and d['mountpoint'] == mountpoint), None)
                 if idx is not None:
                     remove_disk(self.discos, idx, self.discos_json)
             QMessageBox.information(self, 'Success', 'Disk deleted.')
+            send_notification('Disk Deleted', f'Disk {device_or_file} deleted.', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.png')))
             self.update_table()
         except subprocess.CalledProcessError as e:
-            QMessageBox.critical(self, 'Error', f'Failed to delete disk:\n{e}')
+            err = e.stderr or str(e)
+            QMessageBox.critical(self, 'Error', f'Failed to delete disk:\n{err}')
+            send_notification('Error', f'Failed to delete disk {device_or_file}', icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
 
     def open_mount_dir(self, row, col):
         mountpoint = self.table.item(row, 2).text()
@@ -351,7 +478,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(about_dialog)
         label = QLabel(
             '<b>VDM</b> (Virtual Disk Manager)<br>'
-            'Version 0.1 beta<br>'
+            'Version 0.1.2 beta<br>'
             'Author: Esther (<a href="https://github.com/SterTheStar">github.com/SterTheStar</a>)<br>'
             '<br>'
             '<b>SourceCode:</b> <a href="">GPL v3.0</a><br>'
@@ -370,4 +497,28 @@ class MainWindow(QMainWindow):
         if link == '#gpl3':
             show_full_license(self)
 
-    # ... (restante dos métodos da MainWindow, igual ao main.py, exceto o bloco if __name__ == '__main__') ... 
+    def open_edit_disk_dialog(self):
+        from vdm.editdisk import EditDiskDialog
+        dlg = EditDiskDialog(self, self.discos)
+        dlg.exec_()
+
+    def monitor_disks(self):
+        from vdm.logic.utils import get_disk_usage, send_notification, format_size
+        for disk in self.discos:
+            if disk.get('status') == 'Mounted' and os.path.exists(disk.get('mountpoint', '')):
+                try:
+                    used, total = get_disk_usage(disk['mountpoint'])
+                    if total > 0:
+                        percent = used / total
+                        if percent >= 0.9:
+                            key = (disk.get('device_or_file'), disk.get('mountpoint'))
+                            if key not in self.notified_full:
+                                send_notification('Disk Almost Full', f"{disk['mountpoint']}: {format_size(used)} / {format_size(total)} ({percent*100:.0f}%) used.", icon=os.path.abspath(os.path.join(os.path.dirname(__file__), '../vdm-bin/icon.ico')))
+                                self.notified_full.add(key)
+                        else:
+                            key = (disk.get('device_or_file'), disk.get('mountpoint'))
+                            if key in self.notified_full:
+                                self.notified_full.remove(key)
+                except Exception:
+                    pass
+        self.update_table()

@@ -4,7 +4,7 @@ import shutil
 import subprocess
 
 APP_NAME = 'vdm'
-VERSION = '0.1 beta'
+VERSION = '0.1.2 beta'
 AUTHOR = 'Esther'
 DESCRIPTION = 'Virtual Disk Manager'
 COPYRIGHT = 'Esther'

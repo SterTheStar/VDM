@@ -1,0 +1,74 @@
+/* Tema Dark para VDM */
+QMainWindow, QWidget, QDialog {
+    background: #181a1b;
+    color: #e0e0e0;
+}
+
+QLabel {
+    color: #e0e0e0;
+}
+
+QPushButton, QToolButton {
+    background: #232526;
+    color: #e0e0e0;
+    border: 1px solid #232526;
+    border-radius: 6px;
+    padding: 6px 12px;
+}
+QPushButton:hover, QToolButton:hover {
+    background: #2d3133;
+    border: 1px solid #3a8dde;
+}
+QPushButton:pressed, QToolButton:pressed {
+    background: #1a1c1d;
+    border: 1px solid #1976d2;
+}
+
+QTableWidget, QScrollArea {
+    background: #202223;
+    border: none;
+}
+
+QHeaderView::section {
+    background: #232526;
+    color: #e0e0e0;
+    border: none;
+    font-weight: bold;
+}
+
+QProgressBar {
+    background: #232526;
+    border: 1px solid #232526;
+    border-radius: 7px;
+    text-align: center;
+    color: #e0e0e0;
+    height: 14px;
+}
+QProgressBar::chunk {
+    background-color: #3a8dde;
+    border-radius: 7px;
+}
+
+QComboBox {
+    background: #232526;
+    color: #e0e0e0;
+    border: 1px solid #232526;
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+QComboBox QAbstractItemView {
+    background: #232526;
+    color: #e0e0e0;
+    selection-background-color: #3a8dde;
+    selection-color: #fff;
+}
+
+QFrame {
+    background: #232526;
+    border-radius: 8px;
+    border: none;
+}
+
+QDialog {
+    background: #181a1b;
+} 

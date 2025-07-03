@@ -3,10 +3,15 @@ import json
 import subprocess
 
 def load_disks(discos_json):
-    """Load disks from the JSON file."""
+    """Load disks from the JSON file, removendo discos cujo mountpoint não existe."""
     if os.path.exists(discos_json):
         with open(discos_json, 'r') as f:
-            return json.load(f)
+            discos = json.load(f)
+        # Remove discos cujo mountpoint não existe
+        filtered = [d for d in discos if d.get('mountpoint') and os.path.exists(d['mountpoint'])]
+        if len(filtered) != len(discos):
+            save_disks(filtered, discos_json)
+        return filtered
     return []
 
 def save_disks(discos, discos_json):
@@ -26,7 +31,7 @@ def remove_disk(discos, idx, discos_json):
     save_disks(discos, discos_json)
 
 def sync_disks_status(discos):
-    """Update the status of file disks based on system state."""
+    """Update the status of file disks based on system state, including LUKS encrypted disks."""
     try:
         mounts = subprocess.check_output(['mount'], text=True)
     except Exception:
@@ -38,13 +43,20 @@ def sync_disks_status(discos):
     for disk in discos:
         if disk['type'] == 'File':
             loopdev = None
-            for line in losetup.splitlines():
-                if disk['device_or_file'] in line:
-                    import re
-                    m = re.match(r'(/dev/loop\d+):', line)
-                    if m:
-                        loopdev = m.group(1)
-                        break
+            if disk.get('encrypted'):
+                import os
+                luks_name = os.path.basename(disk['device_or_file']) + '_luks'
+                luks_path = f'/dev/mapper/{luks_name}'
+                if os.path.exists(luks_path):
+                    loopdev = luks_path
+            else:
+                for line in losetup.splitlines():
+                    if disk['device_or_file'] in line:
+                        import re
+                        m = re.match(r'(/dev/loop\d+):', line)
+                        if m:
+                            loopdev = m.group(1)
+                            break
             if loopdev and any(loopdev in mline for mline in mounts.splitlines()):
                 disk['status'] = 'Mounted'
             else:
