@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QComboBox, QLineEdit, QLabel, QDialogButtonBox, QMessageBox
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QComboBox, QLineEdit, QLabel, QDialogButtonBox, QMessageBox
 from vdm.logic.utils import format_size, get_disk_usage
 import os
 import subprocess

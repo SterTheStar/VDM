@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QComboBox, QPushButton, QVBoxLayout, QTextEdit, QCheckBox, QLabel
+from PySide6.QtWidgets import QDialog, QFormLayout, QLineEdit, QDialogButtonBox, QComboBox, QPushButton, QVBoxLayout, QTextEdit, QCheckBox, QLabel
 
 class RamDiskDialog(QDialog):
     """Dialog for creating a RAM disk."""
@@ -143,23 +143,20 @@ class FileDiskDialog(QDialog):
         )
 
 def show_full_license(parent):
-    """Show the full GPL v3.0 license in a scrollable dialog."""
-    gpl_text = '''GNU GENERAL PUBLIC LICENSE
-Version 3, 29 June 2007
-
-Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
-Everyone is permitted to copy and distribute verbatim copies
-of this license document, but changing it is not allowed.
-
-... (full GPL 3.0 text here, truncated for brevity) ...
-
-For the full license, see https://www.gnu.org/licenses/gpl-3.0.html
-'''
+    """Show the full GPL v3.0 license in a scrollable dialog, loading from resources/LICENSE."""
+    import os
     dlg = QDialog(parent)
     dlg.setWindowTitle('GPL v3.0 License')
     layout = QVBoxLayout(dlg)
     text = QTextEdit()
     text.setReadOnly(True)
+    # Lê o arquivo LICENSE da pasta resources
+    license_path = os.path.join(os.path.dirname(__file__), 'resources', 'LICENSE')
+    try:
+        with open(license_path, 'r') as f:
+            gpl_text = f.read()
+    except Exception:
+        gpl_text = 'License file not found.'
     text.setPlainText(gpl_text)
     layout.addWidget(text)
     btn = QPushButton('Close')
